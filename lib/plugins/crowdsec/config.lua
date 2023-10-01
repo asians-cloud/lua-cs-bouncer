@@ -85,7 +85,7 @@ function config.loadConfig(file)
 			conf[key] = "ban"
 		    end
 		elseif key == "MODE" then
-		    if not has_value({'stream', 'live'}, value) then
+		    if not has_value({'stream', 'live', 'sse'}, value) then
 			ngx.log(ngx.ERR, "unsupported value '" .. value .. "' for variable '" .. key .. "'. Using default value 'stream' instead")
 			conf[key] = "stream"
 		    end
