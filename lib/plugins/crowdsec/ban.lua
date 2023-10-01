@@ -1,4 +1,8 @@
+local ngx = ngx
+local kong = kong
+
 local utils = require "plugins.crowdsec.utils"
+
 
 
 local M = {_TYPE='module', _NAME='ban.funcs', _VERSION='1.0-0'}
@@ -11,9 +15,9 @@ M.ret_code = ngx.HTTP_FORBIDDEN
 function M.new(template_path, redirect_location, ret_code)
     M.redirect_location = redirect_location
 
-    ret_code_ok = false
+    local ret_code_ok = false
     if ret_code ~= nil and ret_code ~= 0 and ret_code ~= "" then
-        for k, v in pairs(utils.HTTP_CODE) do
+        for k, _ in pairs(utils.HTTP_CODE) do
             if k == ret_code then
                 M.ret_code = utils.HTTP_CODE[ret_code]
                 ret_code_ok = true
@@ -25,7 +29,7 @@ function M.new(template_path, redirect_location, ret_code)
         end
     end
 
-    template_file_ok = false
+    local template_file_ok = false
     if (template_path ~= nil and template_path ~= "" and utils.file_exist(template_path) == true) then
         M.template_str = utils.read_file(template_path)
         if M.template_str ~= nil then
@@ -48,16 +52,23 @@ function M.apply()
         return
     end
     if M.template_str ~= "" then
-        ngx.header.content_type = "text/html"
-        ngx.status = M.ret_code
-        ngx.say(M.template_str)
-        ngx.exit(M.ret_code)
+        if kong ~= nil then
+            kong.response.set_header("content_type", "text/html; charset=UTF-8")
+            kong.response.set_header('x-gaius-openresty', 'BAN')
+            kong.response.exit(M.ret_code, M.template_str)
+        else
+            ngx.header.content_type = "text/html; charset=UTF-8"
+            ngx.status = M.ret_code
+            ngx.header['x-gaius-openresty'] = 'BAN'
+            ngx.say(M.template_str)
+            ngx.exit(M.ret_code)
+        end
+
         return
     end
- 
-    ngx.exit(M.ret_code)
 
-    return
+    ngx.exit(M.ret_code)
+    -- return
 end
 
 return M

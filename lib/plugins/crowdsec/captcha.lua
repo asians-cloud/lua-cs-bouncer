@@ -1,3 +1,5 @@
+local ngx = ngx
+
 local http = require "resty.http"
 local cjson = require "cjson"
 local template = require "plugins.crowdsec.template"
@@ -91,7 +93,7 @@ function M.GetCaptchaBackendKey()
     return captcha_frontend_key[M.CaptchaProvider] .. "-response"
 end
 
-function table_to_encoded_url(args)
+local function table_to_encoded_url(args)
     local params = {}
     for k, v in pairs(args) do table.insert(params, k .. '=' .. v) end
     return table.concat(params, "&")
@@ -122,14 +124,13 @@ function M.Validate(captcha_res, remote_ip)
     local result = cjson.decode(res.body)
 
     if result.success == false then
-      for k, v in pairs(result["error-codes"]) do
+      for _, v in pairs(result["error-codes"]) do
         if v == "invalid-input-secret" then
           ngx.log(ngx.ERR, "reCaptcha secret key is invalid")
           return true, nil
         end
-      end 
+      end
     end
-
     return result.success, nil
 end
 

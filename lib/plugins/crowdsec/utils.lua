@@ -1,3 +1,5 @@
+local ngx = ngx
+
 local M = {}
 
 
@@ -13,13 +15,14 @@ M.HTTP_CODE["401"] = ngx.HTTP_UNAUTHORIZED
 M.HTTP_CODE["403"] = ngx.HTTP_FORBIDDEN
 M.HTTP_CODE["404"] = ngx.HTTP_NOT_FOUND
 M.HTTP_CODE["405"] = ngx.HTTP_NOT_ALLOWED
+M.HTTP_CODE["429"] = ngx.HTTP_TOO_MANY_REQUESTS
 M.HTTP_CODE["500"] = ngx.HTTP_INTERNAL_SERVER_ERROR
 
 function M.read_file(path)
    local file = io.open(path, "r") -- r read mode and b binary mode
    if not file then return nil end
    io.input(file)
-   content = io.read("*a")
+   local content = io.read("*a")
    io.close(file)
    return content
  end
@@ -29,28 +32,32 @@ function M.file_exist(path)
    return nil
  end
  local f = io.open(path, "r")
- if f ~= nil then 
+ if f ~= nil then
    io.close(f)
-   return true 
- else 
+   return true
+ else
    return false
  end
 end
 
 function M.starts_with(str, start)
-    return str:sub(1, #start) == start
- end
- 
- function M.ends_with(str, ending)
-    return ending == "" or str:sub(-#ending) == ending
- end
+   return str:sub(1, #start) == start
+end
+
+function M.ends_with(str, ending)
+   return ending == "" or str:sub(-#ending) == ending
+end
 
 function M.table_len(table)
-   local count = 0
-   for k, v in pairs(table) do
-      count = count + 1
-   end
-   return count
+   return #table
 end
+
+-- function M.table_len(table)
+--    local count = 0
+--    for k, v in pairs(table) do
+--       count = count + 1
+--    end
+--    return count
+-- end
 
 return M

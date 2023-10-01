@@ -1,3 +1,5 @@
+local ngx = ngx
+
 local config = {}
 
 function config.file_exists(file)
@@ -8,16 +10,16 @@ function config.file_exists(file)
     return f ~= nil
 end
 
-  function split(s, delimiter)
-    result = {};
-    for match in (s..delimiter):gmatch("(.-)"..delimiter.."(.-)") do
-        table.insert(result, match);
-    end
-    return result;
-end
+--   function split(s, delimiter)
+--     result = {};
+--     for match in (s..delimiter):gmatch("(.-)"..delimiter.."(.-)") do
+--         table.insert(result, match);
+--     end
+--     return result;
+-- end
 
 local function has_value (tab, val)
-    for index, value in ipairs(tab) do
+    for _, value in ipairs(tab) do
         if value == val then
             return true
         end
@@ -88,7 +90,7 @@ function config.loadConfig(file)
 			conf[key] = "stream"
 		    end
 		elseif key == "EXCLUDE_LOCATION" then
-		    exclude_location = {}
+		    local exclude_location = {}
 		    if value ~= "" then
 			for match in (value..","):gmatch("(.-)"..",") do
 			    table.insert(exclude_location, match)
