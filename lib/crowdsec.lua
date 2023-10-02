@@ -12,6 +12,9 @@ local utils = require "plugins.crowdsec.utils"
 local ban = require "plugins.crowdsec.ban"
 local sse = require "plugins.crowdsec.sse"
 
+local BLOCKED = false
+local UNBLOCKED = true
+
 -- contain runtime = {}
 local runtime = {}
 -- remediations are stored in cache as int (shared dict tags)
@@ -30,6 +33,9 @@ local csmod = {}
 
 local function item_to_string(item, scope)
   local ip, cidr, ip_version
+  if scope == nil then
+    scope = "ip"
+  end
   if scope:lower() == "ip" then
     ip = item
   end
@@ -60,7 +66,7 @@ end
 
 
 local function parse_duration(duration)
-  local match, err = ngx.re.match(duration, "^((?<hours>[0-9]+)h)?((?<minutes>[0-9]+)m)?(?<seconds>[0-9]+)")
+  local match, err = ngx.re.match(duration, "^((?<hours>[0-9]+)h)?((?<minutes>[0-9]+)m)?(?<seconds>[0-9]+)?")
   local ttl = 0
   if not match then
     if err then
@@ -136,8 +142,8 @@ local function sse_query(premature)
             runtime.cache:delete("captcha_" .. decision.value)
           end
           local key = item_to_string(decision.value, decision.scope)
-          local in_cache, _ = runtime.cache:get(key)
-          if in_cache == nil then
+          local blocked, _ = runtime.cache:get(key)
+          if blocked == nil then
             goto continue
           end
           runtime.cache:delete(key)
@@ -155,11 +161,11 @@ local function sse_query(premature)
             ngx.log(ngx.ERR, "[Crowdsec] failed to parse ban duration '" .. decision.duration .. "' : " .. err_parse)
           end
           local key = item_to_string(decision.value, decision.scope)
-          local cached, err_cache = runtime.cache:get(key)
+          local blocked, err_cache = runtime.cache:get(key)
           if err_cache ~= nil then
             ngx.log(ngx.ERR, "[Crowdsec] fetch cache error: " .. err_cache)
           end
-          if cached ~= nil then
+          if blocked ~= nil then -- DONOT overwrite existing decision
             goto continue
           end
 
@@ -168,7 +174,7 @@ local function sse_query(premature)
             remediation_id = get_remediation_id(runtime.fallback)
           end
 
-          local succ, err_set, forcible = runtime.cache:set(key, true, ttl, remediation_id)
+          local succ, err_set, forcible = runtime.cache:set(key, BLOCKED, ttl, remediation_id)
           if not succ then
             ngx.log(ngx.ERR, "failed to add ".. decision.value .." : "..err_set)
           end
@@ -331,7 +337,7 @@ local function stream_query(premature)
   local link = runtime.conf["API_URL"] .. "/v1/decisions/stream?startup=" .. tostring(is_startup)
   local res, err = get_http_request(link)
   if not res then
-    error("Failed to get http request: " ..err .. ", retrying in " .. runtime.conf["UPDATE_FREQUENCY"] .. " seconds")
+    error("Failed to get http request " .. link .. " with error: " ..err .. ", retrying in " .. runtime.conf["UPDATE_FREQUENCY"] .. " seconds")
     local ok, err_timer = ngx.timer.at(runtime.conf["UPDATE_FREQUENCY"], stream_query)
     if not ok then
       set_refreshing(false)
@@ -424,7 +430,7 @@ local function live_query(ip)
   if body == "null" then -- no result from API, no decision for this IP
     -- set ip in cache and DON'T block it
     local key = item_to_string(ip, "ip")
-    succ, err, forcible = runtime.cache:set(key, true, runtime.conf["CACHE_EXPIRATION"], 1)
+    succ, err, forcible = runtime.cache:set(key, UNBLOCKED, runtime.conf["CACHE_EXPIRATION"], 1)
     if not succ then
       ngx.log(ngx.ERR, "failed to add ip '" .. ip .. "' in cache: "..err)
     end
@@ -441,7 +447,7 @@ local function live_query(ip)
       remediation_id = get_remediation_id(runtime.fallback)
     end
     local key = item_to_string(decision.value, decision.scope)
-    succ, err, forcible = runtime.cache:set(key, false, runtime.conf["CACHE_EXPIRATION"], remediation_id)
+    succ, err, forcible = runtime.cache:set(key, BLOCKED, runtime.conf["CACHE_EXPIRATION"], remediation_id)
     if not succ then
       ngx.log(ngx.ERR, "failed to add ".. decision.value .." : "..err)
     end
@@ -548,10 +554,9 @@ function csmod.allowIp(ip)
     if key_type == "ipv6" then
       item = key_type.."_"..table.concat(netmask, ":").."_"..iputils.ipv6_band(ip_network_address, netmask)
     end
-    local in_cache, remediation_id = runtime.cache:get(item)
+    local blocked, remediation_id = runtime.cache:get(item)
     if in_cache ~= nil then -- we have it in cache
-      ngx.log(ngx.DEBUG, "'" .. key .. "' is in cache")
-      return in_cache, runtime.remediations[tostring(remediation_id)], nil
+      return blocked, runtime.remediations[tostring(remediation_id)], nil
     end
   end
 
@@ -574,7 +579,7 @@ function csmod.AddDecision(decision)
     remediation_id = get_remediation_id(runtime.fallback)
   end
   local key = item_to_string(decision.value, decision.scope)
-  local succ, err_set, forcible = runtime.cache:set(key, false, ttl, remediation_id)
+  local succ, err_set, forcible = runtime.cache:set(key, BLOCKED, ttl, remediation_id)
   if not succ then
     ngx.log(ngx.ERR, "failed to add ".. decision.value .." : "..err_set)
   end
