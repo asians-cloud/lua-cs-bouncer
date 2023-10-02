@@ -135,8 +135,8 @@ local function sse_query(premature)
     if type(decisions.deleted) == "table" then
         for _, decision in pairs(decisions.deleted) do
           if decision.type == "captcha" then
-            local in_cache, _ = runtime.cache:get("captcha_" .. decision.value)
-            if in_cache == nil then
+            local blocked, _ = runtime.cache:get("captcha_" .. decision.value)
+            if blocked == nil then
               goto continue
             end
             runtime.cache:delete("captcha_" .. decision.value)
@@ -537,10 +537,10 @@ function csmod.allowIp(ip)
 
   local key_type = key_parts[1]
   if key_type == "normal" then
-    local in_cache, remediation_id = runtime.cache:get(key)
-    if in_cache ~= nil then -- we have it in cache
+    local blocked, remediation_id = runtime.cache:get(key)
+    if blocked ~= nil then -- we have it in cache
       ngx.log(ngx.DEBUG, "'" .. key .. "' is in cache")
-      return in_cache, runtime.remediations[tostring(remediation_id)], nil
+      return blocked, runtime.remediations[tostring(remediation_id)], nil
     end
   end
 
@@ -555,7 +555,7 @@ function csmod.allowIp(ip)
       item = key_type.."_"..table.concat(netmask, ":").."_"..iputils.ipv6_band(ip_network_address, netmask)
     end
     local blocked, remediation_id = runtime.cache:get(item)
-    if in_cache ~= nil then -- we have it in cache
+    if blocked ~= nil then -- we have it in cache
       return blocked, runtime.remediations[tostring(remediation_id)], nil
     end
   end
