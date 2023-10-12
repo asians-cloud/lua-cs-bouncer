@@ -623,6 +623,7 @@ function csmod.Allow(ip)
                 end
 
                 ngx.header['x-gaius-openresty'] = 'PROTECTED'
+                ngx.req.set_method(ngx.HTTP_GET)
                 return
             else
                 ngx.log(ngx.ALERT, "Invalid captcha from " .. ngx.var.remote_addr)
