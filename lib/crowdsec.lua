@@ -10,7 +10,6 @@ local cjson = require "cjson"
 local recaptcha = require "plugins.crowdsec.recaptcha"
 local utils = require "plugins.crowdsec.utils"
 local ban = require "plugins.crowdsec.ban"
-local sse = require "plugins.crowdsec.sse"
 
 local BLOCKED = false
 local UNBLOCKED = true
@@ -23,8 +22,6 @@ runtime.remediations = {}
 runtime.remediations["1"] = "ban"
 runtime.remediations["2"] = "captcha"
 runtime.conn = nil
-runtime.sse_querying = false
-
 
 runtime.timer_started = false
 
@@ -100,7 +97,7 @@ end
 local function set_refreshing(value)
   local succ, err, forcible = runtime.cache:set("refreshing", value)
   if not succ then
-    error("Failed to set refreshing key in cache: "..err)
+    ngx.log(ngx.ERR, "Failed to set refreshing key in cache: "..err)
   end
   if forcible then
     ngx.log(ngx.ERR, "Lua shared dict (crowdsec cache) is full, please increase dict size in config")
@@ -108,86 +105,6 @@ local function set_refreshing(value)
 end
 
 
-local function sse_query(premature)
-  -- We have to make modification in plugins/crowdsec/sse.lua@_parse_sse.
-  -- The current implementation is following the default SSE convention of
-  -- "\n\n" frame break and prefixed event/data sending.
-  --
-  -- This behaviour needs to be modified.
-  if premature then
-    return
-  end
-  runtime.sse_querying = true
-  if runtime.conn then
-    local event, err = runtime.conn:receive()
-    if err then
-      ngx.log(ngx.ALERT, "error getting event from SSE: " .. err)
-      runtime.conn = nil
-      ngx.timer.at(5, csmod.SetupSSE)
-    end
-
-    if event == nil then
-      return
-    end
-    local decisions = event
-
-    -- process deleted decisions
-    if type(decisions.deleted) == "table" then
-        for _, decision in pairs(decisions.deleted) do
-          if decision.type == "captcha" then
-            local blocked, _ = runtime.cache:get("captcha_" .. decision.value)
-            if blocked == nil then
-              goto continue
-            end
-            runtime.cache:delete("captcha_" .. decision.value)
-          end
-          local key = item_to_string(decision.value, decision.scope)
-          local blocked, _ = runtime.cache:get(key)
-          if blocked == nil then
-            goto continue
-          end
-          runtime.cache:delete(key)
-          ngx.log(ngx.ALERT, "Deleting '" .. key .. "'")
-          ::continue::
-        end
-    end
-
-    -- process new decisions
-    if type(decisions.new) == "table" then
-      for _, decision in pairs(decisions.new) do
-        if runtime.conf["BOUNCING_ON_TYPE"] == decision.type or runtime.conf["BOUNCING_ON_TYPE"] == "all" then
-          local ttl, err_parse = parse_duration(decision.duration)
-          if err_parse ~= nil then
-            ngx.log(ngx.ERR, "[Crowdsec] failed to parse ban duration '" .. decision.duration .. "' : " .. err_parse)
-          end
-          local key = item_to_string(decision.value, decision.scope)
-          local blocked, err_cache = runtime.cache:get(key)
-          if err_cache ~= nil then
-            ngx.log(ngx.ERR, "[Crowdsec] fetch cache error: " .. err_cache)
-          end
-          if blocked ~= nil then -- DONOT overwrite existing decision
-            goto continue
-          end
-
-          local remediation_id = get_remediation_id(decision.type)
-          if remediation_id == nil then
-            remediation_id = get_remediation_id(runtime.fallback)
-          end
-
-          local succ, err_set, forcible = runtime.cache:set(key, BLOCKED, ttl, remediation_id)
-          if not succ then
-            ngx.log(ngx.ERR, "failed to add ".. decision.value .." : "..err_set)
-          end
-          if forcible then
-            ngx.log(ngx.ERR, "Lua shared dict (crowdsec cache) is full, please increase dict size in config")
-          end
-          ngx.log(ngx.ALERT, "Adding '" .. key .. "' in cache for '" .. ttl .. "' seconds")
-          ::continue::
-        end
-      end
-    end
-  end
-end
 
 
 
@@ -258,16 +175,8 @@ function csmod.init(configFile, userAgent)
 
   local worker_id = ngx.worker.id()
 
-  if runtime.conf['MODE'] == 'sse' and not runtime.sse_querying and worker_id == 0 then
-    local _, err_timer = ngx.timer.at(0, csmod.SetupSSE)
-    if err_timer then
-      ngx.log(ngx.ERR, "Error on calling the SetupSSE " .. err_timer)
-    end
-
-    local _, err_interval = ngx.timer.every(1, sse_query)
-    if err_interval then
-      ngx.log(ngx.ERR, "Error on calling the sse_query " .. err_interval)
-    end
+  if runtime.conf['MODE'] == 'sse' then
+    ngx.log(ngx.ERR, "SSE mode is disabled")
   end
   return true, nil
 end
@@ -311,7 +220,7 @@ local function stream_query(premature)
     ngx.log(ngx.DEBUG, "another worker is refreshing the data, returning")
     local ok, err = ngx.timer.at(runtime.conf["UPDATE_FREQUENCY"], stream_query)
     if not ok then
-      error("Failed to create the timer: " .. (err or "unknown"))
+      ngx.log(ngx.ERR, "Failed to create the timer: " .. (err or "unknown"))
     end
     return
   end
@@ -324,7 +233,7 @@ local function stream_query(premature)
         ngx.log(ngx.DEBUG, "last refresh was less than " .. runtime.conf["UPDATE_FREQUENCY"] .. " seconds ago, returning")
         local ok, err = ngx.timer.at(runtime.conf["UPDATE_FREQUENCY"], stream_query)
         if not ok then
-          error("Failed to create the timer: " .. (err or "unknown"))
+          ngx.log(ngx.ERR, "Failed to create the timer: " .. (err or "unknown"))
         end
         return
       end
@@ -337,19 +246,18 @@ local function stream_query(premature)
   local link = runtime.conf["API_URL"] .. "/v1/decisions/stream?startup=" .. tostring(is_startup)
   local res, err = get_http_request(link)
   if not res then
-    error("Failed to get http request " .. link .. " with error: " ..err .. ", retrying in " .. runtime.conf["UPDATE_FREQUENCY"] .. " seconds")
+    ngx.log(ngx.ERR, "Failed to get http request " .. link .. " with error: " ..err .. ", retrying in " .. runtime.conf["UPDATE_FREQUENCY"] .. " seconds")
     local ok, err_timer = ngx.timer.at(runtime.conf["UPDATE_FREQUENCY"], stream_query)
     if not ok then
-      set_refreshing(false)
-      error("Failed to create the timer: " .. (err_timer or "unknown"))
+      ngx.log(ngx.ERR, "Failed to create the timer: " .. (err_timer or "unknown"))
     end
     set_refreshing(false)
-    error("request failed: ".. err_timer)
+    return
   end
 
   local succ, err_cache_set, forcible = runtime.cache:set("last_refresh", ngx.time())
   if not succ then
-    error("Failed to set last_refresh key in cache: "..err_cache_set)
+    ngx.log(ngx.ERR, "Failed to set last_refresh key in cache: "..err_cache_set)
   end
   if forcible then
     ngx.log(ngx.ERR, "Lua shared dict (crowdsec cache) is full, please increase dict size in config")
@@ -363,11 +271,11 @@ local function stream_query(premature)
   if status~=200 then
     local ok, err_timer2 = ngx.timer.at(runtime.conf["UPDATE_FREQUENCY"], stream_query)
     if not ok then
-      set_refreshing(false)
-      error("Failed to create the timer: " .. (err_timer2 or "unknown"))
+      ngx.log(ngx.ERR, "Failed to create the timer: " .. (err_timer2 or "unknown"))
     end
     set_refreshing(false)
-    error("HTTP error while request to Local API '" .. status .. "' with message (" .. tostring(body) .. ")")
+    ngx.log(ngx.ERR, "HTTP error while request to Local API '" .. status .. "' with message (" .. tostring(body) .. ")")
+    return
   end
 
   local decisions = cjson.decode(body)
@@ -405,7 +313,7 @@ local function stream_query(premature)
   local ok, err_timer3 = ngx.timer.at(runtime.conf["UPDATE_FREQUENCY"], stream_query)
   if not ok then
     set_refreshing(false)
-    error("Failed to create the timer: " .. (err_timer3 or "unknown"))
+    ngx.log(ngx.ERR, "Failed to create the timer: " .. (err_timer3 or "unknown"))
   end
 
   set_refreshing(false)
@@ -463,44 +371,6 @@ end
 
 function csmod.GetCaptchaTemplate()
   return recaptcha.GetTemplate()
-end
-
-function csmod.SetupSSE(premature)
-  if premature then
-    return
-  end
-  local worker_id = tostring(ngx.worker.id())
-  if runtime.conf["MODE"] == "sse" then
-    if runtime.conn == nil then
-      ngx.log(ngx.ALERT, "SSE Query from worker: " .. worker_id)
-
-      local link = runtime.conf["API_URL"] .. "/v1/decisions-stream"
-      local headers = {
-        ['X-Api-Key'] = runtime.conf["API_KEY"],
-        ['User-Agent'] = runtime.userAgent,
-        ['Cache-Control'] = 'no-cache',
-        ['Accept'] = 'text/event-stream',
-        ['Connection'] = 'keep-alive'
-      }
-
-      local conn, err_sse = sse.new()
-      if not conn then
-        ngx.timer.at(5, csmod.SetupSSE)
-        error("failed to get connection to SSE: " .. (err_sse or "unknown"))
-      end
-
-      local res, err_request = conn:request_uri(link, { headers = headers })
-      if not res then
-        ngx.timer.at(5, csmod.SetupSSE)
-        error("failed to request SSE: " .. (err_request or "unknown"))
-      end
-
-      if res.status ~= 200 then
-        error("fail to request SSE: " .. (err_request or "unknown"))
-      end
-      runtime.conn = conn
-    end
-  end
 end
 
 
