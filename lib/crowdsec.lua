@@ -152,12 +152,11 @@ local function get_remediation_id(remediation)
   return nil
 end
 
-local function item_to_string(item, scope)
+local function hash_decision(item, scope)
   local ip, cidr, ip_version
   if scope:lower() == "ip" then
     ip = item
-  end
-  if scope:lower() == "range" then
+  elseif scope:lower() == "range" then
     ip, cidr = iputils.splitRange(item, scope)
   end
 
@@ -175,9 +174,11 @@ local function item_to_string(item, scope)
     end
   end
 
-  if ip_version == nil then
-    return "normal_"..item
-  end
+  -- CODE REVIEW: impossible to have ip_version == nil
+  -- if ip_version == nil then
+  --   return "normal_"..item
+  -- end
+  
   local ip_netmask = iputils.cidrToInt(cidr, ip_version)
   return ip_version.."_"..ip_netmask.."_"..ip_network_address
 end
@@ -201,7 +202,7 @@ function csmod.AddDecision(decision)
   if remediation_id == nil then
     remediation_id = get_remediation_id(runtime.fallback)
   end
-  local key = item_to_string(decision.value, decision.scope)
+  local key = hash_decision(decision.value, decision.scope)
   local succ, err, forcible = runtime.cache:set(key, false, ttl, remediation_id)
   if not succ then
     ngx.log(ngx.ERR, "failed to add ".. decision.value .." : "..err)
@@ -219,7 +220,7 @@ function csmod.DelDecision(decision)
   if decision.type == "captcha" then
     runtime.cache:delete("captcha_" .. decision.value)
   end
-  local key = item_to_string(decision.value, decision.scope)
+  local key = hash_decision(decision.value, decision.scope)
   runtime.cache:delete(key)
   ngx.log(ngx.DEBUG, "Deleting '" .. key .. "'")
 end
@@ -355,7 +356,7 @@ local function live_query(ip)
   end
   if body == "null" then -- no result from API, no decision for this IP
     -- set ip in cache and DON'T block it
-    local key = item_to_string(ip, "ip")
+    local key = hash_decision(ip, "ip")
     local succ, err, forcible = runtime.cache:set(key, true, runtime.conf["CACHE_EXPIRATION"], 1)
     if not succ then
       ngx.log(ngx.ERR, "failed to add ip '" .. ip .. "' in cache: "..err)
@@ -372,7 +373,7 @@ local function live_query(ip)
     if remediation_id == nil then
       remediation_id = get_remediation_id(runtime.fallback)
     end
-    local key = item_to_string(decision.value, decision.scope)
+    local key = hash_decision(decision.value, decision.scope)
     local succ, err, forcible = runtime.cache:set(key, false, runtime.conf["CACHE_EXPIRATION"], remediation_id)
     if not succ then
       ngx.log(ngx.ERR, "failed to add ".. decision.value .." : "..err)
@@ -416,7 +417,7 @@ function csmod.allowIp(ip)
 
   -- csmod.SetupStream()
 
-  local key = item_to_string(ip, "ip")
+  local key = hash_decision(ip, "ip")
   local key_parts = {}
   for i in key.gmatch(key, "([^_]+)") do
     table.insert(key_parts, i)
