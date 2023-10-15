@@ -154,6 +154,10 @@ end
 
 local function hash_decision(item, scope)
   local ip, cidr, ip_version
+  if scope == nil then
+    scope = "ip"
+  end
+  
   if scope:lower() == "ip" then
     ip = item
   elseif scope:lower() == "range" then
@@ -547,7 +551,7 @@ function csmod.Allow(ip)
           local previous_uri, state_id = ngx.shared.crowdsec_cache:get("captcha_"..ngx.var.remote_addr)
           -- we check if the IP is already in cache for captcha and not yet validated
           if previous_uri == nil or state_id ~= recaptcha.GetStateID(recaptcha._VALIDATED_STATE) then
-            if kong == null then
+            if kong == nil then
               ngx.header.content_type = "text/html; charset=UTF-8"
               ngx.status = 202
               ngx.say(csmod.GetCaptchaTemplate())
@@ -573,7 +577,7 @@ function csmod.Allow(ip)
             end
             ngx.log(ngx.ALERT, "[Crowdsec] denied '" .. ngx.var.remote_addr .. "' with '"..remediation.."'")
 
-            if kong ~= null then
+            if kong ~= nil then
               kong.response.set_header("content_type", "text/html; charset=UTF-8")
               kong.response.set_header('x-gaius-openresty', 'HIT')
               kong.response.exit(202, csmod.GetCaptchaTemplate())
