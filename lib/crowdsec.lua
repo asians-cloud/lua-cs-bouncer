@@ -533,7 +533,7 @@ function csmod.Allow(ip)
                 ngx.redirect(previous_uri)
                 return
             else
-                ngx.log(ngx.ALERT, "Invalid captcha from " .. ngx.var.remote_addr)
+                ngx.log(ngx.ERR, "Invalid captcha from " .. ngx.var.remote_addr)
             end
         end
     end
@@ -541,7 +541,7 @@ function csmod.Allow(ip)
 
   if not ok then
       if remediation == "ban" then
-        ngx.log(ngx.ALERT, "[Crowdsec] denied '" .. ngx.var.remote_addr .. "' with '"..remediation.."'")
+        ngx.log(ngx.DEBUG, "[Crowdsec] denied '" .. ngx.var.remote_addr .. "' with '"..remediation.."'")
         ngx.header['x-gaius-openresty'] = 'BANNED'
         ban.apply()
         return
@@ -575,7 +575,7 @@ function csmod.Allow(ip)
             if forcible then
               ngx.log(ngx.ERR, "Lua shared dict (crowdsec cache) is full, please increase dict size in config")
             end
-            ngx.log(ngx.ALERT, "[Crowdsec] denied '" .. ngx.var.remote_addr .. "' with '"..remediation.."'")
+            ngx.log(ngx.DEBUG, "[Crowdsec] denied '" .. ngx.var.remote_addr .. "' with '"..remediation.."'")
 
             if kong ~= nil then
               kong.response.set_header("content_type", "text/html; charset=UTF-8")
