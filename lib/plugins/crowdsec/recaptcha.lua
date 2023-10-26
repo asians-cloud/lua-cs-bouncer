@@ -34,6 +34,8 @@ end
 
 
 
+
+
 function M.New(siteKey, secretKey, TemplateFilePath)
 
     if siteKey == nil or siteKey == "" then
@@ -67,9 +69,12 @@ function M.New(siteKey, secretKey, TemplateFilePath)
     return nil
 end
 
-
 function M.GetTemplate()
     return M.Template
+end
+
+function M.GetCaptchaBackendKey()
+  return "g-recaptcha-response"
 end
 
 

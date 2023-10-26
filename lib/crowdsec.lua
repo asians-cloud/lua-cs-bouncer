@@ -7,7 +7,6 @@ local cjson = require "cjson"
 local recaptcha = require "plugins.crowdsec.recaptcha"
 local utils = require "plugins.crowdsec.utils"
 local ban = require "plugins.crowdsec.ban"
-local sse = require "plugins.crowdsec.sse"
 
 -- contain runtime = {}
 local runtime = {}
@@ -16,13 +15,12 @@ local runtime = {}
 runtime.remediations = {}
 runtime.remediations["1"] = "ban"
 runtime.remediations["2"] = "captcha"
-runtime.conn = nil
-runtime.sse_querying = false
 
 
 runtime.timer_started = false
 
 local csmod = {}
+
 
 
 -- init function
@@ -87,19 +85,6 @@ function csmod.init(configFile, userAgent)
     end
   end
 
-  local worker_id = ngx.worker.id()
-
-  if runtime.conf['MODE'] == 'sse' and not runtime.sse_querying and worker_id == 0 then
-    local ok, err = ngx.timer.at(0, csmod.SetupSSE)
-    if err then
-      ngx.log(ngx.ERR, "Error on calling the SetupSSE " .. err)
-    end
-
-    local ok, err = ngx.timer.every(1, sse_query)
-    if err then
-      ngx.log(ngx.ERR, "Error on calling the sse_query " .. err)
-    end
-  end
   return true, nil
 end
 
@@ -167,12 +152,15 @@ local function get_remediation_id(remediation)
   return nil
 end
 
-local function item_to_string(item, scope)
+local function hash_decision(item, scope)
   local ip, cidr, ip_version
+  if scope == nil then
+    scope = "ip"
+  end
+  
   if scope:lower() == "ip" then
     ip = item
-  end
-  if scope:lower() == "range" then
+  elseif scope:lower() == "range" then
     ip, cidr = iputils.splitRange(item, scope)
   end
 
@@ -190,9 +178,11 @@ local function item_to_string(item, scope)
     end
   end
 
-  if ip_version == nil then
-    return "normal_"..item
-  end
+  -- CODE REVIEW: impossible to have ip_version == nil
+  -- if ip_version == nil then
+  --   return "normal_"..item
+  -- end
+  
   local ip_netmask = iputils.cidrToInt(cidr, ip_version)
   return ip_version.."_"..ip_netmask.."_"..ip_network_address
 end
@@ -216,7 +206,7 @@ function csmod.AddDecision(decision)
   if remediation_id == nil then
     remediation_id = get_remediation_id(runtime.fallback)
   end
-  local key = item_to_string(decision.value, decision.scope)
+  local key = hash_decision(decision.value, decision.scope)
   local succ, err, forcible = runtime.cache:set(key, false, ttl, remediation_id)
   if not succ then
     ngx.log(ngx.ERR, "failed to add ".. decision.value .." : "..err)
@@ -225,12 +215,29 @@ function csmod.AddDecision(decision)
     ngx.log(ngx.ERR, "Lua shared dict (crowdsec cache) is full, please increase dict size in config")
   end
   ngx.log(ngx.DEBUG, "Adding '" .. key .. "' in cache for '" .. ttl .. "' seconds")
+  return succ, err, forcible
+  
 end
 
 
+function csmod.DelDecision(decision)
+  if decision.type == "captcha" then
+    runtime.cache:delete("captcha_" .. decision.value)
+  end
+  local key = hash_decision(decision.value, decision.scope)
+  runtime.cache:delete(key)
+  ngx.log(ngx.DEBUG, "Deleting '" .. key .. "'")
+end
+
+
+
+
 local function stream_query(premature)
-  -- As this function is running inside coroutine (with ngx.timer.at),
+  -- As this function is running inside coroutine (with ngx.timer.at), 
   -- we need to raise error instead of returning them
+
+
+  ngx.log(ngx.DEBUG, "running timers: " .. tostring(ngx.timer.running_count()) .. " | pending timers: " .. tostring(ngx.timer.pending_count()))
 
   if premature then
     ngx.log(ngx.DEBUG, "premature run of the timer, returning")
@@ -288,8 +295,6 @@ local function stream_query(premature)
   local status = res.status
   local body = res.body
 
-  -- ngx.log(ngx.ERR, "Response:" .. tostring(status) .. " | " .. tostring(body))
-
   if status~=200 then
     local ok, err = ngx.timer.at(runtime.conf["UPDATE_FREQUENCY"], stream_query)
     if not ok then
@@ -304,12 +309,8 @@ local function stream_query(premature)
   -- process deleted decisions
   if type(decisions.deleted) == "table" then
       for i, decision in pairs(decisions.deleted) do
-        if decision.type == "captcha" then
-          runtime.cache:delete("captcha_" .. decision.value)
-        end
-        local key = item_to_string(decision.value, decision.scope)
-        runtime.cache:delete(key)
-        ngx.log(ngx.DEBUG, "Deleting '" .. key .. "'")
+        csmod.DelDecision(decision)
+        
       end
   end
 
@@ -357,7 +358,7 @@ local function live_query(ip)
   end
   if body == "null" then -- no result from API, no decision for this IP
     -- set ip in cache and DON'T block it
-    local key = item_to_string(ip, "ip")
+    local key = hash_decision(ip, "ip")
     local succ, err, forcible = runtime.cache:set(key, true, runtime.conf["CACHE_EXPIRATION"], 1)
     if not succ then
       ngx.log(ngx.ERR, "failed to add ip '" .. ip .. "' in cache: "..err)
@@ -374,7 +375,7 @@ local function live_query(ip)
     if remediation_id == nil then
       remediation_id = get_remediation_id(runtime.fallback)
     end
-    local key = item_to_string(decision.value, decision.scope)
+    local key = hash_decision(decision.value, decision.scope)
     local succ, err, forcible = runtime.cache:set(key, false, runtime.conf["CACHE_EXPIRATION"], remediation_id)
     if not succ then
       ngx.log(ngx.ERR, "failed to add ".. decision.value .." : "..err)
@@ -389,110 +390,13 @@ local function live_query(ip)
   end
 end
 
-function sse_query(premature)
-  -- We have to make modification in plugins/crowdsec/sse.lua@_parse_sse.
-  -- The current implementation is following the default SSE convention of
-  -- "\n\n" frame break and prefixed event/data sending.
-  --
-  -- This behaviour needs to be modified.
-  if premature then
-    return
-  end
-  runtime.sse_querying = true
-  if runtime.conn then
-    local event, err = runtime.conn:receive()
-    if err then
-      ngx.log(ngx.ALERT, "error getting event from SSE: " .. err)
-      runtime.conn = nil
-      ngx.timer.at(5, csmod.SetupSSE)
-    end
-
-    if event == nil then
-      return
-    end
-    local decisions = event
-
-    -- process deleted decisions
-    if type(decisions.deleted) == "table" then
-        for i, decision in pairs(decisions.deleted) do
-          if decision.type == "captcha" then
-            runtime.cache:delete("captcha_" .. decision.value)
-          end
-          local key = item_to_string(decision.value, decision.scope)
-          runtime.cache:delete(key)
-          ngx.log(ngx.ALERT, "Deleting '" .. key .. "'")
-        end
-    end
-
-    -- process new decisions
-    if type(decisions.new) == "table" then
-      for i, decision in pairs(decisions.new) do
-        if runtime.conf["BOUNCING_ON_TYPE"] == decision.type or runtime.conf["BOUNCING_ON_TYPE"] == "all" then
-          local ttl, err = parse_duration(decision.duration)
-          if err ~= nil then
-            ngx.log(ngx.ERR, "[Crowdsec] failed to parse ban duration '" .. decision.duration .. "' : " .. err)
-          end
-          local remediation_id = get_remediation_id(decision.type)
-          if remediation_id == nil then
-            remediation_id = get_remediation_id(runtime.fallback)
-          end
-          local key = item_to_string(decision.value, decision.scope)
-          local succ, err, forcible = runtime.cache:set(key, false, ttl, remediation_id)
-          if not succ then
-            ngx.log(ngx.ERR, "failed to add ".. decision.value .." : "..err)
-          end
-          if forcible then
-            ngx.log(ngx.ERR, "Lua shared dict (crowdsec cache) is full, please increase dict size in config")
-          end
-          ngx.log(ngx.ALERT, "Adding '" .. key .. "' in cache for '" .. ttl .. "' seconds")
-        end
-      end
-    end
-  end
-end
-
 function csmod.GetCaptchaTemplate()
   return recaptcha.GetTemplate()
 end
 
-function csmod.SetupSSE(premature)
-  if premature then
-    return
-  end
-  local worker_id = tostring(ngx.worker.id())
-  if runtime.conf["MODE"] == "sse" then
-    if runtime.conn == nil then
-      ngx.log(ngx.ALERT, "SSE Query from worker: " .. worker_id)
-
-      local link = runtime.conf["API_URL"] .. "/v1/decisions-stream"
-      local headers = {
-        ['X-Api-Key'] = runtime.conf["API_KEY"],
-        ['User-Agent'] = runtime.userAgent,
-        ['Cache-Control'] = 'no-cache',
-        ['Accept'] = 'text/event-stream',
-        ['Connection'] = 'keep-alive'
-      }
-
-      local conn, err = sse.new()
-      if not conn then
-        ngx.timer.at(5, csmod.SetupSSE)
-        error("failed to get connection to SSE: " .. (err or "unknown"))
-      end
-
-      local res, err = conn:request_uri(link, { headers = headers })
-      if not res then
-        ngx.timer.at(5, csmod.SetupSSE)
-        error("failed to request SSE: " .. (err or "unknown"))
-      end
-
-      if res.status ~= 200 then
-        error("fail to request SSE: " .. (err or "unknown"))
-      end
-      runtime.conn = conn
-    end
-  end
+function csmod.GetCaptchaBackendKey()
+  return recaptcha.GetCaptchaBackendKey()
 end
-
 
 function csmod.SetupStream()
   -- if it stream mode and startup start timer
@@ -513,9 +417,9 @@ function csmod.allowIp(ip)
     return true, nil, "Configuration is bad, cannot run properly"
   end
 
-  csmod.SetupStream()
+  -- csmod.SetupStream()
 
-  local key = item_to_string(ip, "ip")
+  local key = hash_decision(ip, "ip")
   local key_parts = {}
   for i in key.gmatch(key, "([^_]+)") do
     table.insert(key_parts, i)
@@ -606,7 +510,7 @@ function csmod.Allow(ip)
     local previous_uri, state_id = ngx.shared.crowdsec_cache:get("captcha_"..ngx.var.remote_addr)
     if previous_uri ~= nil and state_id == recaptcha.GetStateID(recaptcha._VERIFY_STATE) then
         ngx.req.read_body()
-        local recaptcha_res = ngx.req.get_post_args()["g-recaptcha-response"] or 0
+        local recaptcha_res = ngx.req.get_post_args()[csmod.GetCaptchaBackendKey()] or 0
         if recaptcha_res ~= 0 then
             local valid, err = csmod.validateCaptcha(recaptcha_res, ngx.var.remote_addr)
             if err ~= nil then
@@ -624,9 +528,10 @@ function csmod.Allow(ip)
 
                 ngx.header['x-gaius-openresty'] = 'PROTECTED'
                 ngx.req.set_method(ngx.HTTP_GET)
+                ngx.redirect(previous_uri)
                 return
             else
-                ngx.log(ngx.ALERT, "Invalid captcha from " .. ngx.var.remote_addr)
+                ngx.log(ngx.ERR, "Invalid captcha from " .. ngx.var.remote_addr)
             end
         end
     end
@@ -634,7 +539,7 @@ function csmod.Allow(ip)
 
   if not ok then
       if remediation == "ban" then
-        ngx.log(ngx.ALERT, "[Crowdsec] denied '" .. ngx.var.remote_addr .. "' with '"..remediation.."'")
+        ngx.log(ngx.DEBUG, "[Crowdsec] denied '" .. ngx.var.remote_addr .. "' with '"..remediation.."'")
         ngx.header['x-gaius-openresty'] = 'BANNED'
         ban.apply()
         return
@@ -644,7 +549,7 @@ function csmod.Allow(ip)
           local previous_uri, state_id = ngx.shared.crowdsec_cache:get("captcha_"..ngx.var.remote_addr)
           -- we check if the IP is already in cache for captcha and not yet validated
           if previous_uri == nil or state_id ~= recaptcha.GetStateID(recaptcha._VALIDATED_STATE) then
-            if kong == null then
+            if kong == nil then
               ngx.header.content_type = "text/html; charset=UTF-8"
               ngx.status = 202
               ngx.say(csmod.GetCaptchaTemplate())
@@ -668,9 +573,9 @@ function csmod.Allow(ip)
             if forcible then
               ngx.log(ngx.ERR, "Lua shared dict (crowdsec cache) is full, please increase dict size in config")
             end
-            ngx.log(ngx.ALERT, "[Crowdsec] denied '" .. ngx.var.remote_addr .. "' with '"..remediation.."'")
+            ngx.log(ngx.DEBUG, "[Crowdsec] denied '" .. ngx.var.remote_addr .. "' with '"..remediation.."'")
 
-            if kong ~= null then
+            if kong ~= nil then
               kong.response.set_header("content_type", "text/html; charset=UTF-8")
               kong.response.set_header('x-gaius-openresty', 'HIT')
               kong.response.exit(202, csmod.GetCaptchaTemplate())
@@ -686,9 +591,6 @@ end
 
 -- Use it if you are able to close at shuttime
 function csmod.close()
-  if runtime.conn ~= nil then
-    runtime.conn:close()
-  end
 end
 
 return csmod
