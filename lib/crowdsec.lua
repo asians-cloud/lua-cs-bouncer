@@ -288,7 +288,7 @@ local function stream_query(premature)
   local status = res.status
   local body = res.body
 
-  ngx.log(ngx.ERR, "Response:" .. tostring(status) .. " | " .. tostring(body))
+  -- ngx.log(ngx.ERR, "Response:" .. tostring(status) .. " | " .. tostring(body))
 
   if status~=200 then
     local ok, err = ngx.timer.at(runtime.conf["UPDATE_FREQUENCY"], stream_query)
