@@ -78,16 +78,22 @@ function config.loadConfig(file)
 		    if not has_value(valid_truefalse_values, value) then
 			ngx.log(ngx.ERR, "unsupported value '" .. value .. "' for variable '" .. key .. "'. Using default value 'true' instead")
 			conf[key] = "true"
-		    end
+                    else
+                      conf[key] = value
+		    end 
 		elseif key == "BOUNCING_ON_TYPE" then
 		    if not has_value(valid_bouncing_on_type_values, value) then
 			ngx.log(ngx.ERR, "unsupported value '" .. value .. "' for variable '" .. key .. "'. Using default value 'ban' instead")
 			conf[key] = "ban"
+                    else
+                      conf[key] = value
 		    end
 		elseif key == "MODE" then
 		    if not has_value({'stream', 'live'}, value) then
 			ngx.log(ngx.ERR, "unsupported value '" .. value .. "' for variable '" .. key .. "'. Using default value 'stream' instead")
 			conf[key] = "stream"
+                    else
+                      conf[key] = value
 		    end
 		elseif key == "EXCLUDE_LOCATION" then
 		    local exclude_location = {}
@@ -101,6 +107,8 @@ function config.loadConfig(file)
 		    if not has_value({'captcha', 'ban'}, value) then
 			ngx.log(ngx.ERR, "unsupported value '" .. value .. "' for variable '" .. key .. "'. Using default value 'ban' instead")
 			conf[key] = "ban"
+                    else
+                      conf[key] = value
 		    end
 		else
 		    conf[key] = value
