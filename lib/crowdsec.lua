@@ -190,7 +190,7 @@ end
 local function set_refreshing(value)
   local succ, err, forcible = runtime.cache:set("refreshing", value)
   if not succ then
-    error("Failed to set refreshing key in cache: "..err)
+    return nil, "Failed to set refreshing key in cache: " ..err
   end
   if forcible then
     ngx.log(ngx.ERR, "Lua shared dict (crowdsec cache) is full, please increase dict size in config")
@@ -250,7 +250,7 @@ local function stream_query(premature)
     ngx.log(ngx.DEBUG, "another worker is refreshing the data, returning")
     local ok, err = ngx.timer.at(runtime.conf["UPDATE_FREQUENCY"], stream_query)
     if not ok then
-      error("Failed to create the timer: " .. (err or "unknown"))
+      return nil, "Failed to create the timer: " .. (err or "unknown")
     end
     return
   end
@@ -263,7 +263,7 @@ local function stream_query(premature)
         ngx.log(ngx.DEBUG, "last refresh was less than " .. runtime.conf["UPDATE_FREQUENCY"] .. " seconds ago, returning")
         local ok, err = ngx.timer.at(runtime.conf["UPDATE_FREQUENCY"], stream_query)
         if not ok then
-          error("Failed to create the timer: " .. (err or "unknown"))
+          return nil, "Failed to create the timer: " .. (err or "unknown")
         end
         return
       end
@@ -279,14 +279,14 @@ local function stream_query(premature)
     local ok, err = ngx.timer.at(runtime.conf["UPDATE_FREQUENCY"], stream_query)
     if not ok then
       set_refreshing(false)
-      error("Failed to create the timer: " .. (err or "unknown"))
+      return nil, "Failed to create the timer: " .. (err or "unknown")
     end
     set_refreshing(false)
   end
 
   local succ, err, forcible = runtime.cache:set("last_refresh", ngx.time())
   if not succ then
-    error("Failed to set last_refresh key in cache: "..err)
+    return nil, "Failed to set last_refresh key in cache: " ..err
   end
   if forcible then
     ngx.log(ngx.ERR, "Lua shared dict (crowdsec cache) is full, please increase dict size in config")
@@ -301,10 +301,10 @@ local function stream_query(premature)
     local ok, err = ngx.timer.at(runtime.conf["UPDATE_FREQUENCY"], stream_query)
     if not ok then
       set_refreshing(false)
-      error("Failed to create the timer: " .. (err or "unknown"))
+      return nil, "Failed to create the timer: " .. (err or "unknown")
     end
     set_refreshing(false)
-    error("HTTP error while request to Local API '" .. status .. "' with message (" .. tostring(body) .. ")")
+    return nil, "HTTP error while request to Local API '" .. status .. "' with message (" .. tostring(body) .. ")"
   end
 
   local decisions = cjson.decode(body)
@@ -338,7 +338,7 @@ local function stream_query(premature)
   local ok, err = ngx.timer.at(runtime.conf["UPDATE_FREQUENCY"], stream_query)
   if not ok then
     set_refreshing(false)
-    error("Failed to create the timer: " .. (err or "unknown"))
+    return nil, "Failed to create the timer: " .. (err or "unknown")
   end
 
   set_refreshing(false)
