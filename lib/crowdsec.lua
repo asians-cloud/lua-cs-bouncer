@@ -83,6 +83,8 @@ function csmod.init(configFile, userAgent)
     if forcible then
       ngx.log(ngx.ERR, "Lua shared dict (crowdsec cache) is full, please increase dict size in config")
     end
+
+    csmod.SetupStream()
   end
 
   return true, nil
