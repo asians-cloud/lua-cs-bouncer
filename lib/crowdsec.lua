@@ -83,6 +83,8 @@ function csmod.init(configFile, userAgent)
     if forcible then
       ngx.log(ngx.ERR, "Lua shared dict (crowdsec cache) is full, please increase dict size in config")
     end
+
+    csmod.SetupStream()
   end
 
   return true, nil
@@ -294,8 +296,6 @@ local function stream_query(premature)
 
   local status = res.status
   local body = res.body
-
-  ngx.log(ngx.DEBUG, "Response:" .. tostring(status) .. " | " .. tostring(body))
 
   if status~=200 then
     local ok, err = ngx.timer.at(runtime.conf["UPDATE_FREQUENCY"], stream_query)
