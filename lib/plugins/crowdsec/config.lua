@@ -41,8 +41,8 @@ function config.loadConfig(file)
         return nil, "File ".. file .." doesn't exist"
     end
     local conf = {}
-    local valid_params = {'ENABLED','API_URL', 'API_KEY', 'BOUNCING_ON_TYPE', 'MODE', 'SECRET_KEY', 'SITE_KEY', 'BAN_TEMPLATE_PATH' ,'CAPTCHA_TEMPLATE_PATH', 'REDIRECT_LOCATION', 'RET_CODE', 'EXCLUDE_LOCATION', 'FALLBACK_REMEDIATION', 'CAPTCHA_PROVIDER'}
-    local valid_int_params = {'CACHE_EXPIRATION', 'CACHE_SIZE', 'REQUEST_TIMEOUT', 'UPDATE_FREQUENCY', 'CAPTCHA_EXPIRATION'}
+    local valid_params = {'ENABLED','API_URL', 'API_KEY', 'BOUNCING_ON_TYPE', 'MODE', 'SECRET_KEY', 'SITE_KEY', 'BAN_TEMPLATE_PATH' ,'CAPTCHA_TEMPLATE_PATH', 'REDIRECT_LOCATION', 'RET_CODE', 'EXCLUDE_LOCATION', 'FALLBACK_REMEDIATION', 'CAPTCHA_PROVIDER', 'SESSION_SECRET', 'SESSION_STORAGE', 'SESSION_REDIS_HOST', 'SESSION_REDIS_PORT', 'SESSION_REDIS_DATABASE', 'SESSION_IDLING_TIMEOUT', 'SESSION_ROLLING_TIMEOUT', 'SESSION_COOKIE_NAME'}
+    local valid_int_params = {'CACHE_EXPIRATION', 'CACHE_SIZE', 'REQUEST_TIMEOUT', 'UPDATE_FREQUENCY', 'CAPTCHA_EXPIRATION', 'SESSION_REDIS_PORT', 'SESSION_REDIS_DATABASE', 'SESSION_IDLING_TIMEOUT', 'SESSION_ROLLING_TIMEOUT'}
     local valid_bouncing_on_type_values = {'ban', 'captcha', 'all'}
     local valid_truefalse_values = {'false', 'true'}
     local default_values = {
@@ -55,7 +55,15 @@ function config.loadConfig(file)
         ['REDIRECT_LOCATION'] = "",
         ['EXCLUDE_LOCATION'] = {},
         ['RET_CODE'] = 0,
-	    ['CAPTCHA_PROVIDER'] = "recaptcha"
+	    ['CAPTCHA_PROVIDER'] = "recaptcha",
+        ['SESSION_SECRET'] = "RuyH78toNa",
+        ['SESSION_STORAGE'] = "redis",
+        ['SESSION_REDIS_HOST'] = "127.0.0.1",
+        ['SESSION_REDIS_PORT'] = 6379,
+        ['SESSION_REDIS_DATABASE'] = 0,
+        ['SESSION_IDLING_TIMEOUT'] = 3600,
+        ['SESSION_ROLLING_TIMEOUT'] = 3600,
+        ['SESSION_COOKIE_NAME'] = "crowdsec_captcha_session"
     }
     for line in io.lines(file) do
         local isOk = false
