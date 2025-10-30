@@ -39,11 +39,11 @@ function csmod.init(configFile, userAgent)
     storage = runtime.conf["SESSION_STORAGE"],
     redis = {
       host = runtime.conf["SESSION_REDIS_HOST"],
-      port = runtime.conf["SESSION_REDIS_PORT"],
-      database = runtime.conf["SESSION_REDIS_DATABASE"],
+      port = tonumber(runtime.conf["SESSION_REDIS_PORT"]),
+      database = tonumber(runtime.conf["SESSION_REDIS_DATABASE"]),
     },
-    idling_timeout = runtime.conf["SESSION_IDLING_TIMEOUT"],
-    rolling_timeout = runtime.conf["SESSION_ROLLING_TIMEOUT"],
+    idling_timeout = tonumber(runtime.conf["SESSION_IDLING_TIMEOUT"]),
+    rolling_timeout = tonumber(runtime.conf["SESSION_ROLLING_TIMEOUT"]),
     cookie_name = runtime.conf["SESSION_COOKIE_NAME"],
   }
   
