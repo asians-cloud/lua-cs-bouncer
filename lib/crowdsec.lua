@@ -7,6 +7,7 @@ local cjson = require "cjson"
 local recaptcha = require "plugins.crowdsec.recaptcha"
 local utils = require "plugins.crowdsec.utils"
 local ban = require "plugins.crowdsec.ban"
+local session = require "resty.session"
 
 -- contain runtime = {}
 local runtime = {}
@@ -16,11 +17,10 @@ runtime.remediations = {}
 runtime.remediations["1"] = "ban"
 runtime.remediations["2"] = "captcha"
 
-
 runtime.timer_started = false
 
 local csmod = {}
-
+local session_config = {}
 
 
 -- init function
@@ -33,6 +33,21 @@ function csmod.init(configFile, userAgent)
   runtime.userAgent = userAgent
   runtime.cache = ngx.shared.crowdsec_cache
   runtime.fallback = runtime.conf["FALLBACK_REMEDIATION"]
+  
+  session_config = {
+    secret = runtime.conf["SESSION_SECRET"],
+    storage = runtime.conf["SESSION_STORAGE"],
+    redis = {
+      host = runtime.conf["SESSION_REDIS_HOST"],
+      port = runtime.conf["SESSION_REDIS_PORT"],
+      database = runtime.conf["SESSION_REDIS_DATABASE"],
+    },
+    idling_timeout = runtime.conf["SESSION_IDLING_TIMEOUT"],
+    rolling_timeout = runtime.conf["SESSION_ROLLING_TIMEOUT"],
+    cookie_name = runtime.conf["SESSION_COOKIE_NAME"],
+  }
+  
+  session.init(session_config)
 
   if runtime.conf["ENABLED"] == "false" then
     return "Disabled", nil
@@ -93,6 +108,42 @@ end
 
 function csmod.validateCaptcha(g_captcha_res, remote_ip)
   return recaptcha.Validate(g_captcha_res, remote_ip)
+end
+
+function csmod.getSession()
+  return session.start(session_config)
+end
+
+function csmod.isCaptchaVerified()
+  local sess, err, exists = session.open(session_config)
+  if not sess then
+    ngx.log(ngx.ERR, "[Crowdsec] No session found for captcha verification check, worker: " .. tostring(ngx.worker.id()))
+    return false
+  end 
+  if exists then
+    ngx.log(ngx.ERR, "[Crowdsec] Session exists - captcha verified, worker: " .. tostring(ngx.worker.id()))
+    return true
+  end
+  ngx.log(ngx.ERR, "[Crowdsec] Session does not exist - captcha not verified, worker: " .. tostring(ngx.worker.id()))
+  return false
+end
+
+function csmod.setCaptchaVerified()
+  local sess = session.start(session_config)
+  if not sess then
+    ngx.log(ngx.ERR, "[Crowdsec] Failed to create session for captcha verification, worker: " .. tostring(ngx.worker.id()))
+    return
+  end
+  sess:save()
+  ngx.log(ngx.ERR, "[Crowdsec] Captcha verification session created and saved, worker: " .. tostring(ngx.worker.id()))
+end
+
+function csmod.clearCaptchaVerification()
+  local sess = session.start(session_config)
+  if sess then
+    sess:destroy()
+    ngx.log(ngx.ERR, "[Crowdsec] Captcha verification session destroyed, worker: " .. tostring(ngx.worker.id()))
+  end
 end
 
 
@@ -420,7 +471,6 @@ function csmod.allowIp(ip)
   end
 
   -- csmod.SetupStream()
-
   local key = hash_decision(ip, "ip")
   local key_parts = {}
   for i in key.gmatch(key, "([^_]+)") do
@@ -488,10 +538,6 @@ function csmod.Allow(ip)
     ngx.log(ngx.ERR, "[Crowdsec] bouncer error: " .. err)
   end
 
-  -- if the ip is now allowed, try to delete its captcha state in cache
-  if ok == true then
-    ngx.shared.crowdsec_cache:delete("captcha_" .. ip)
-  end
 
   local captcha_ok = runtime.cache:get("captcha_ok")
 
@@ -507,35 +553,24 @@ function csmod.Allow(ip)
     end
   end
 
-  if captcha_ok then -- if captcha can be use (configuration is valid)
-    -- we check if the IP need to validate its captcha before checking it against crowdsec local API
-    local previous_uri, state_id = ngx.shared.crowdsec_cache:get("captcha_"..ngx.var.remote_addr)
-    if previous_uri ~= nil and state_id == recaptcha.GetStateID(recaptcha._VERIFY_STATE) then
-        ngx.req.read_body()
-        local recaptcha_res = ngx.req.get_post_args()[csmod.GetCaptchaBackendKey()] or 0
-        if recaptcha_res ~= 0 then
-            local valid, err = csmod.validateCaptcha(recaptcha_res, ngx.var.remote_addr)
-            if err ~= nil then
-              ngx.log(ngx.ERR, "Error while validating captcha: " .. err)
-            end
-            if valid == true then
-                -- captcha is valid, we redirect the IP to its previous URI but in GET method
-                local succ, err, forcible = ngx.shared.crowdsec_cache:set("captcha_"..ngx.var.remote_addr, previous_uri, runtime.conf["CAPTCHA_EXPIRATION"], recaptcha.GetStateID(recaptcha._VALIDATED_STATE))
-                if not succ then
-                  ngx.log(ngx.ERR, "failed to add key about captcha for ip '" .. ngx.var.remote_addr .. "' in cache: "..err)
-                end
-                if forcible then
-                  ngx.log(ngx.ERR, "Lua shared dict (crowdsec cache) is full, please increase dict size in config")
-                end
-
-                ngx.header['x-gaius-openresty'] = 'PROTECTED'
-                ngx.req.set_method(ngx.HTTP_GET)
-                ngx.redirect(previous_uri)
-                return
-            else
-                ngx.log(ngx.ERR, "Invalid captcha from " .. ngx.var.remote_addr)
-            end
-        end
+  if captcha_ok then 
+    ngx.req.read_body()
+    local recaptcha_res = ngx.req.get_post_args()[csmod.GetCaptchaBackendKey()] or 0
+    if recaptcha_res ~= 0 then
+      local valid, err = csmod.validateCaptcha(recaptcha_res, ngx.var.remote_addr)
+      if err ~= nil then
+        ngx.log(ngx.ERR, "Error while validating captcha: " .. err)
+      end
+      if valid == true then
+        ngx.log(ngx.DEBUG, "[Crowdsec] Captcha validation successful, setting verification in session")
+        csmod.setCaptchaVerified()
+        ngx.header['x-gaius-openresty'] = 'PROTECTED'
+        ngx.req.set_method(ngx.HTTP_GET)
+        ngx.redirect(ngx.var.uri)
+        return
+      else
+        ngx.log(ngx.ERR, "Invalid captcha from " .. ngx.var.remote_addr)
+      end
     end
   end
 
@@ -546,47 +581,42 @@ function csmod.Allow(ip)
         ban.apply()
         return
       end
-      -- if the remediation is a captcha and captcha is well configured
       if remediation == "captcha" and captcha_ok and ngx.var.uri ~= "/favicon.ico" then
-          local previous_uri, state_id = ngx.shared.crowdsec_cache:get("captcha_"..ngx.var.remote_addr)
-          -- we check if the IP is already in cache for captcha and not yet validated
-          if previous_uri == nil or state_id ~= recaptcha.GetStateID(recaptcha._VALIDATED_STATE) then
-            if kong == nil then
-              ngx.header.content_type = "text/html; charset=UTF-8"
-              ngx.status = 202
-              ngx.say(csmod.GetCaptchaTemplate())
-            end
+        if csmod.isCaptchaVerified() then
+          ngx.log(ngx.DEBUG, "[Crowdsec] User has already verified captcha in session, allowing access")
+          ngx.header['x-gaius-openresty'] = 'PROTECTED'
+          return
+        end
+        
+        if kong == nil then
+          ngx.header.content_type = "text/html; charset=UTF-8"
+          ngx.status = 202
+          ngx.say(csmod.GetCaptchaTemplate())
+        end
 
-            local uri = ngx.var.uri
-            -- in case its not a GET request, we prefer to fallback on referer
-            if ngx.req.get_method() ~= "GET" then
-              local headers, err = ngx.req.get_headers()
-              for k, v in pairs(headers) do
-                if k == "referer" then
-                  uri = v
-                end
-              end
-            end
-
-            local succ, err, forcible = ngx.shared.crowdsec_cache:set("captcha_"..ngx.var.remote_addr, uri , 60, recaptcha.GetStateID(recaptcha._VERIFY_STATE))
-            if not succ then
-              ngx.log(ngx.ERR, "failed to add key about captcha for ip '" .. ngx.var.remote_addr .. "' in cache: "..err)
-            end
-            if forcible then
-              ngx.log(ngx.ERR, "Lua shared dict (crowdsec cache) is full, please increase dict size in config")
-            end
-            ngx.log(ngx.DEBUG, "[Crowdsec] denied '" .. ngx.var.remote_addr .. "' with '"..remediation.."'")
-
-            if kong ~= nil then
-              kong.response.set_header("content_type", "text/html; charset=UTF-8")
-              kong.response.set_header('x-gaius-openresty', 'HIT')
-              kong.response.exit(202, csmod.GetCaptchaTemplate())
-
+        local uri = ngx.var.uri
+        -- in case its not a GET request, we prefer to fallback on referer
+        if ngx.req.get_method() ~= "GET" then
+          local headers, err = ngx.req.get_headers()
+          for k, v in pairs(headers) do
+            if k == "referer" then
+              uri = v
             end
           end
+        end
+
+        if kong ~= nil then
+          kong.response.set_header("content_type", "text/html; charset=UTF-8")
+          kong.response.set_header('x-gaius-openresty', 'HIT')
+          kong.response.exit(202, csmod.GetCaptchaTemplate())
+        end
       end
   elseif remediation == "captcha" then
     ngx.header['x-gaius-openresty'] = 'PROTECTED'
+  end
+
+  if ok == true and (remediation == nil or remediation == "") then
+    csmod.clearCaptchaVerification()
   end
 end
 
