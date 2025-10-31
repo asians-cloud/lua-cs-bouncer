@@ -555,7 +555,11 @@ function csmod.Allow(ip)
 
   if captcha_ok then 
     ngx.req.read_body()
-    local recaptcha_res = ngx.req.get_post_args()[csmod.GetCaptchaBackendKey()] or 0
+    local post_args = ngx.req.get_post_args()
+    local recaptcha_res = 0
+    if post_args ~= nil then
+      recaptcha_res = post_args[csmod.GetCaptchaBackendKey()] or 0
+    end
     if recaptcha_res ~= 0 then
       local valid, err = csmod.validateCaptcha(recaptcha_res, ngx.var.remote_addr)
       if err ~= nil then
