@@ -432,7 +432,12 @@ function csmod.allowIp(ip)
     local in_cache, remediation_id = runtime.cache:get(key)
     if in_cache ~= nil then -- we have it in cache
       ngx.log(ngx.DEBUG, "'" .. key .. "' is in cache")
-      return in_cache, runtime.remediations[tostring(remediation_id)], nil
+      local remediation = runtime.remediations[tostring(remediation_id)]
+      if runtime.conf["BOUNCING_ON_TYPE"] ~= "all" and remediation ~= runtime.conf["BOUNCING_ON_TYPE"] then
+        ngx.log(ngx.DEBUG, "[Crowdsec] Decision type '" .. tostring(remediation) .. "' does not match BOUNCING_ON_TYPE '" .. runtime.conf["BOUNCING_ON_TYPE"] .. "', treating as allowed")
+        return true, nil, nil
+      end
+      return in_cache, remediation, nil
     end
   end
 
@@ -449,7 +454,12 @@ function csmod.allowIp(ip)
     local in_cache, remediation_id = runtime.cache:get(item)
     if in_cache ~= nil then -- we have it in cache
       ngx.log(ngx.DEBUG, "'" .. key .. "' is in cache")
-      return in_cache, runtime.remediations[tostring(remediation_id)], nil
+      local remediation = runtime.remediations[tostring(remediation_id)]
+      if runtime.conf["BOUNCING_ON_TYPE"] ~= "all" and remediation ~= runtime.conf["BOUNCING_ON_TYPE"] then
+        ngx.log(ngx.DEBUG, "[Crowdsec] Decision type '" .. tostring(remediation) .. "' does not match BOUNCING_ON_TYPE '" .. runtime.conf["BOUNCING_ON_TYPE"] .. "', treating as allowed")
+        return true, nil, nil
+      end
+      return in_cache, remediation, nil
     end
   end
 
