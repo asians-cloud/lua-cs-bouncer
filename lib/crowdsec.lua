@@ -284,6 +284,10 @@ local function stream_query(premature)
       return nil, "Failed to create the timer: " .. (err or "unknown")
     end
     set_refreshing(false)
+    -- res is nil here (the LAPI request failed); bail out instead of falling
+    -- through to `res.status` below, which crashes the decision-stream timer
+    -- with "attempt to index local 'res' (a nil value)" every UPDATE_FREQUENCY.
+    return
   end
 
   local succ, err, forcible = runtime.cache:set("last_refresh", ngx.time())
